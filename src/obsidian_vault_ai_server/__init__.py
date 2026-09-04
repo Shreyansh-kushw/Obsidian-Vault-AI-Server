@@ -1,8 +1,8 @@
 import secrets
-import aiofiles
 from pathlib import Path
 from typing import Annotated
 
+import aiofiles
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -24,9 +24,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obsidian_vault_ai_server.app.database import get_db
 from obsidian_vault_ai_server.app.models import Jobs
 from obsidian_vault_ai_server.app.schema import QueryRequest
-from obsidian_vault_ai_server.app.services.pipelines import ingestion_pipeline, retrieval_pipeline
-from obsidian_vault_ai_server.app.utils.auth import get_job_or_403, get_owner_token, verify_api_key
-from obsidian_vault_ai_server.app.utils.file_validator import MAX_FILE_BYTES, validate_upload
+from obsidian_vault_ai_server.app.services.pipelines import (
+    ingestion_pipeline,
+    retrieval_pipeline,
+)
+from obsidian_vault_ai_server.app.utils.auth import (
+    get_job_or_403,
+    get_owner_token,
+    verify_api_key,
+)
+from obsidian_vault_ai_server.app.utils.file_validator import (
+    MAX_FILE_BYTES,
+    validate_upload,
+)
 
 app = FastAPI()
 

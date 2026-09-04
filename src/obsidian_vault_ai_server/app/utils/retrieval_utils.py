@@ -1,5 +1,6 @@
 from obsidian_vault_ai_server.app.models import Chunks
 
+
 def reciprocal_rank_fusion(
     ranked_lists: list[list[Chunks]],
     k: int = 60, # constant used in the rrf formula

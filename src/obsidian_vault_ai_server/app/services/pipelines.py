@@ -1,15 +1,8 @@
 from pathlib import Path
 
-import pymupdf as fitz
-from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import (
-    EasyOcrOptions,
-    PdfPipelineOptions,
-)
-from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.document_converter import DocumentConverter
 from fastapi import HTTPException, status
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obsidian_vault_ai_server.app.database import AsyncSessionLocal
@@ -22,53 +15,8 @@ from obsidian_vault_ai_server.app.utils.retrieval_utils import reciprocal_rank_f
 
 # Helper Pipelines
 
-
-def pdf_pipeline(
-    filepath: Path,
-):
-    """Processes a PDF file and returns the chunks of the extracted text"""
-
-    # initializing the PDF pipeline
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = True
-    pipeline_options.ocr_options = EasyOcrOptions()
-
-    # initializing the docling converter
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(
-                pipeline_options=pipeline_options,
-                backend=PyPdfiumDocumentBackend,  # Using PyPdfiumDocumentBackend to fix utf-8 codec error
-            )
-        }
-    )
-
-    # getting the total number of pages in pdf - for batching
-    doc = fitz.open(filepath)
-    page_count = doc.page_count
-    doc.close()
-
-    # checking if there is any need for batching.
-    batching = True if page_count > 10 else False
-
-    if batching:  # batching logic
-        final_chunks = []
-        for start in range(1, page_count + 1, 10):
-            end = min(start + 9, page_count)
-            print(f"Processing pages: {start}-{end}")
-
-            result = converter.convert(filepath, page_range=(start, end))
-            chunks = generate_chunks(dl_doc=result.document)
-            final_chunks.extend(chunks)
-
-        return final_chunks
-
-    result = converter.convert(filepath)
-    return generate_chunks(dl_doc=result.document)
-
-
-def image_and_text_pipeline(filepath: Path):
-    """Processes the text and image files and returns the chunks of the extracted text"""
+def markdown_pipeline(filepath: Path):
+    """Processes the markdown file and returns the chunks of the extracted text"""
 
     # initializing the converter
     converter = DocumentConverter()
@@ -87,26 +35,8 @@ async def ingestion_pipeline(
     try:
         # getting the filename and filetype
         file_ext = filepath.suffix
-
-        # calling the proper pipeline based on filetype
-        if file_ext.lower() == ".pdf":  # pdf pipeline
-            chunks = pdf_pipeline(filepath)
-
-        elif file_ext.lower() in {
-            ".txt",
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".bmp",
-            ".webp",
-            ".tiff",
-            ".tif",
-        }:  # image and text pipeline
-            chunks = image_and_text_pipeline(filepath)
-
-        else:  # unsupported file type
-            raise ValueError(f"Unsupported file type: {file_ext}")
+        
+        chunks = markdown_pipeline(filepath)
 
         # generating embeddings and adding to the table in database
         embeddings = embedder.generate_embeddings(

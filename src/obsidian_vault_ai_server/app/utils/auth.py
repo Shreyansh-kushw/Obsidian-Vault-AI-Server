@@ -3,7 +3,6 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obsidian_vault_ai_server.app.models import Jobs
