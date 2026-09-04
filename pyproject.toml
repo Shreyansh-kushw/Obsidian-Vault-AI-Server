@@ -7,7 +7,28 @@ authors = [
     { name = "Shreyansh Kushwaha", email = "shreyansh.kushw@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "aiofiles>=25.1.0",
+    "alembic>=1.18.4",
+    "asyncpg>=0.31.0",
+    "boto3>=1.43.83",
+    "docling>=2.100.0",
+    "easyocr>=1.7.2",
+    "fastapi>=0.136.3",
+    "langchain>=1.3.9",
+    "langchain-groq>=1.1.3",
+    "pgvector>=0.4.2",
+    "psycopg[binary]>=3.3.4",
+    "pymupdf>=1.27.2.3",
+    "python-magic>=0.4.27",
+    "python-multipart>=0.0.32",
+    "sentence-transformers>=5.5.1",
+    "slowapi>=0.1.10",
+    "sqlalchemy>=2.0.50",
+    "tenacity>=9.1.4",
+    "transformers>=5.8.1",
+    "uvicorn>=0.49.0",
+]
 
 [project.scripts]
 obsidian-vault-ai-server = "obsidian_vault_ai_server:main"
