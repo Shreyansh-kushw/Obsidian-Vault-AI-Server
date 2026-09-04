@@ -171,9 +171,3 @@ async def get_status(
 
     return job.status
 
-
-def main():
-    import uvicorn
-
-    uvicorn.run("obsidian_vault_ai_server:app", host="0.0.0.0", port=8000, reload=True)
-
