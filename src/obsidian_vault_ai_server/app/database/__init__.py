@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-from app.utils.config import settings
+from obsidian_vault_ai_server.app.utils.config import settings
 
 SQLALCHEMY_DATABASE_URL = settings.database_url
 

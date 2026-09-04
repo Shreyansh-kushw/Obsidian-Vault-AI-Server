@@ -12,14 +12,13 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Chunks
-from app.services import embedder
-from app.services.chunker import chunker, generate_chunks
-from app.services.llm_service import generate_response
-from app.utils.retrieval_utils import reciprocal_rank_fusion
-from app.services.reranker_service import rerank
-from app.database import AsyncSessionLocal
-from app.models import Jobs
+from obsidian_vault_ai_server.app.database import AsyncSessionLocal
+from obsidian_vault_ai_server.app.models import Chunks, Jobs
+from obsidian_vault_ai_server.app.services import embedder
+from obsidian_vault_ai_server.app.services.chunker import chunker, generate_chunks
+from obsidian_vault_ai_server.app.services.llm_service import generate_response
+from obsidian_vault_ai_server.app.services.reranker_service import rerank
+from obsidian_vault_ai_server.app.utils.retrieval_utils import reciprocal_rank_fusion
 
 # Helper Pipelines
 
@@ -134,46 +133,31 @@ async def ingestion_pipeline(
 
     except Exception as e:
         async with AsyncSessionLocal() as db:
-            job = await db.execute(
-                select(Jobs).where(Jobs.job_id==job_id)
-            ).scalars().first()
+            job = await db.get(Jobs, job_id)
+            if job:
+                job.succeeded = index + 1
+                job.failed_files = {"filename": filename, "error": str(e)}
+                job.status = "Failed"
 
-            job.succeeded = index + 1
-            job.failed_files = {"filename": filename, "error": str(e)}
-            job.status = "Failed"
-
-            try:
-                await db.commit()
-
-            except Exception as e:
-                await db.rollback()
-
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-                )
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
         raise
     
     else:
         async with AsyncSessionLocal() as db:
-            job = await db.execute(
-                select(Jobs).where(Jobs.job_id==job_id)
-            )
-            job = job.scalars().first()
+            job = await db.get(Jobs, job_id)
+            if job:
+                job.succeeded += 1
 
-            job.succeeded += 1
+                if job.succeeded == job.total_files:
+                    job.status = "Success"
 
-            if job.succeeded == job.total_files:
-                job.status = "Success"
-
-            try:
-                await db.commit()
-
-            except Exception as e:
-                await db.rollback()
-
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-                )
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
 
     finally:
         # Clean up local file from upload_files directory

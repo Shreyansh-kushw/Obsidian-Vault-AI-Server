@@ -1,6 +1,6 @@
 from sentence_transformers import CrossEncoder
 
-from app.models import Chunks
+from obsidian_vault_ai_server.app.models import Chunks
 
 model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L6-v2")
 

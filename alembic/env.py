@@ -3,9 +3,9 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from app.database import Base
-from app.models import *
-from app.utils.config import settings
+from obsidian_vault_ai_server.app.database import Base
+from obsidian_vault_ai_server.app.models import *
+from obsidian_vault_ai_server.app.utils.config import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

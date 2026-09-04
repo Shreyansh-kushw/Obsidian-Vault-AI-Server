@@ -22,6 +22,7 @@ dependencies = [
     "pymupdf>=1.27.2.3",
     "python-magic>=0.4.27",
     "python-multipart>=0.0.32",
+    "pydantic-settings>=2.0.0",
     "sentence-transformers>=5.5.1",
     "slowapi>=0.1.10",
     "sqlalchemy>=2.0.50",

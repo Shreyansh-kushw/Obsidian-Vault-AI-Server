@@ -3,7 +3,7 @@ from sqlalchemy import Integer, String, Text, JSON, Index, Computed
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
-from app.database import Base
+from obsidian_vault_ai_server.app.database import Base
 
 
 class Chunks(Base):

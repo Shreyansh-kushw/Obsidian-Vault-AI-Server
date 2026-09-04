@@ -1,4 +1,4 @@
-from app.models import Chunks
+from obsidian_vault_ai_server.app.models import Chunks
 
 def reciprocal_rank_fusion(
     ranked_lists: list[list[Chunks]],

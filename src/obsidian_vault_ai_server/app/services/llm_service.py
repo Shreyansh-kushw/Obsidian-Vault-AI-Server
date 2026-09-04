@@ -2,8 +2,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from app.models import Chunks
-from app.utils.config import settings
+from obsidian_vault_ai_server.app.models import Chunks
+from obsidian_vault_ai_server.app.utils.config import settings
 
 llm = ChatGroq(model=settings.groq_model, api_key=settings.groq_api_key)
 

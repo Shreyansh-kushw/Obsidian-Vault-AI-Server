@@ -21,12 +21,12 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models import Jobs
-from app.schema import QueryRequest
-from app.services.pipelines import ingestion_pipeline, retrieval_pipeline
-from app.utils.auth import get_job_or_403, get_owner_token, verify_api_key
-from app.utils.file_validator import MAX_FILE_BYTES, validate_upload
+from obsidian_vault_ai_server.app.database import get_db
+from obsidian_vault_ai_server.app.models import Jobs
+from obsidian_vault_ai_server.app.schema import QueryRequest
+from obsidian_vault_ai_server.app.services.pipelines import ingestion_pipeline, retrieval_pipeline
+from obsidian_vault_ai_server.app.utils.auth import get_job_or_403, get_owner_token, verify_api_key
+from obsidian_vault_ai_server.app.utils.file_validator import MAX_FILE_BYTES, validate_upload
 
 app = FastAPI()
 
@@ -114,23 +114,16 @@ async def upload_file(
 
         except Exception as e:
             # raising standard 500 error if any unknown exceptions are encountered.
-            job = await db.execute(
-                select(Jobs).where(Jobs.job_id==job_id)
-            ).scalars().first()
+            job = await db.get(Jobs, job_id)
+            if job:
+                job.succeeded = index + 1
+                job.failed_files = {"filename": filename, "error": str(e)}
+                job.status = "Failed"
 
-            job.succeeded = index + 1
-            job.failed_files = {"filename": filename, "error": str(e)}
-            job.status = "Failed"
-
-            try:
-                await db.commit()
-
-            except Exception as e:
-                await db.rollback()
-
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-                )
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
 
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
@@ -167,3 +160,10 @@ async def get_status(
     job = await get_job_or_403(job_id, owner_token, db)
 
     return job.status
+
+
+def main():
+    import uvicorn
+
+    uvicorn.run("obsidian_vault_ai_server:app", host="0.0.0.0", port=8000, reload=True)
+
