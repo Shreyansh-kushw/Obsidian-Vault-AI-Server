@@ -179,3 +179,26 @@ async def health(
 ):
     return {"status": "ok"}
 
+@app.get("/jobs")
+async def list_jobs(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    api_key: Annotated[str, Depends(verify_api_key)],
+    owner_token: Annotated[str, Depends(get_owner_token)],
+):
+    stmt = (
+        select(Jobs)
+        .where(Jobs.owner_token == owner_token)
+        .order_by(Jobs.job_id.desc())
+    )
+    result = await db.execute(stmt)
+    jobs = result.scalars().all()
+    return [
+        {
+            "id": job.job_id,
+            "name": f"Vault {job.job_id[:8]}",
+            "totalFiles": job.total_files,
+            "status": job.status,
+            "succeeded": job.succeeded,
+        }
+        for job in jobs
+    ]
