@@ -1,7 +1,6 @@
 import magic
 from fastapi import HTTPException, status
 
-ALLOWED_MIME = "text/markdown"
 
 MAX_FILE_BYTES = 25 * 1024 * 1024  # 25MB
 
@@ -13,7 +12,7 @@ def validate_upload(content: bytes, filename: str):
             detail=f"{filename} exceeds size limit",
         )
     mime = magic.from_buffer(content, mime=True)
-    if mime != ALLOWED_MIME:
+    if not mime.startswith("text/"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"{filename}: unsupported type {mime}",

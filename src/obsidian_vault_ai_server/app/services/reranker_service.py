@@ -14,4 +14,4 @@ def rerank(query:str, fused_chunks: list[Chunks]) -> list[Chunks]:
     
     reranked_chunks = [chunk for _, chunk in sorted(zip(scores, fused_chunks[:20]), key= lambda x: x[0], reverse=True)]
 
-    return reranked_chunks[:5]
+    return reranked_chunks[:10]
