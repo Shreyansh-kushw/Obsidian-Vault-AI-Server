@@ -16,11 +16,9 @@ import {
   FileText,
   FolderOpen,
   FolderUp,
-  History,
   KeyRound,
   Loader2,
   Menu,
-  MessageSquare,
   Plus,
   RefreshCw,
   Search,
@@ -43,6 +41,19 @@ import {
   type SourceItem,
   type VaultStatus,
 } from '@/lib/api'
+import {
+  createNewSession,
+  defaultWelcomeMessage,
+  deleteSession,
+  getOrCreateActiveSession,
+  getSavedSessions,
+  getVaultMessages,
+  resetSession,
+  saveVaultMessages,
+  updateSessionMessages,
+  type ChatSession,
+  type Message,
+} from '@/lib/chat-storage'
 
 type Vault = {
   id: string
@@ -52,28 +63,11 @@ type Vault = {
   createdAt: string
 }
 
-type Message = {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  sources?: SourceItem[]
-  isError?: boolean
-}
-
 const defaultSettings: SettingsState = {
   backendUrl: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000',
   apiKey: process.env.API_KEY || '',
   ownerToken: '',
 }
-
-const initialMessages: Message[] = [
-  {
-    id: 'welcome',
-    role: 'assistant',
-    content:
-      "Hello! I'm ready to search your Obsidian notes. Ask me anything about your documents, ideas, or projects.",
-  },
-]
 
 function makeToken() {
   return `client_${crypto.randomUUID().replaceAll('-', '').slice(0, 18)}`
@@ -100,8 +94,11 @@ function statusTone(status: VaultStatus) {
 export default function Page() {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings)
   const [vaults, setVaults] = useState<Vault[]>([])
+  const [vaultsLoading, setVaultsLoading] = useState(true)
   const [activeId, setActiveId] = useState('')
-  const [messages, setMessages] = useState<Message[]>(initialMessages)
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string>('')
+  const [messages, setMessages] = useState<Message[]>([defaultWelcomeMessage])
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [connected, setConnected] = useState(false)
@@ -140,43 +137,74 @@ export default function Page() {
     setVaults(savedVaults)
 
     const savedActive = readStore<string>('vault-rag-active', '')
+    let chosenActive = ''
     if (savedActive && savedVaults.some((v) => v.id === savedActive)) {
+      chosenActive = savedActive
       setActiveId(savedActive)
     } else if (savedVaults.length > 0) {
+      chosenActive = savedVaults[0].id
       setActiveId(savedVaults[0].id)
     }
 
-    setMessages(readStore<Message[]>('vault-rag-chat', initialMessages))
+    // Load messages from direct vault store or sessions
+    const vMsgs = getVaultMessages(chosenActive)
+    const { session, allSessions } = getOrCreateActiveSession(chosenActive)
+    setChatSessions(allSessions)
+    setCurrentSessionId(session.id)
+    if (vMsgs && vMsgs.length > 0) {
+      setMessages(vMsgs)
+    } else {
+      setMessages(session.messages)
+    }
+
     isHydrated.current = true
 
     // Try syncing any jobs from backend if GET /jobs is available
     if (loaded.backendUrl && loaded.apiKey && loaded.ownerToken) {
-      fetchBackendJobs(loaded).then((res) => {
-        if (res.success && res.data.length > 0) {
-          setVaults((current) => {
-            const currentMap = new Map(current.map((v) => [v.id, v]))
-            for (const item of res.data) {
-              const id = item.id || item.job_id || ''
-              if (!id) continue
-              if (!currentMap.has(id)) {
-                currentMap.set(id, {
-                  id,
-                  name: item.name || `Vault ${id.slice(0, 8)}`,
-                  totalFiles: item.totalFiles || item.total_files || 1,
-                  status: item.status || 'Success',
-                  createdAt: item.createdAt || item.created_at || new Date().toISOString(),
-                })
+      fetchBackendJobs(loaded)
+        .then((res) => {
+          if (res.success && res.data.length > 0) {
+            setVaults((current) => {
+              const currentMap = new Map(current.map((v) => [v.id, v]))
+              for (const item of res.data) {
+                const id = item.id || item.job_id || ''
+                if (!id) continue
+                if (!currentMap.has(id)) {
+                  currentMap.set(id, {
+                    id,
+                    name: item.name || `Vault ${id.slice(0, 8)}`,
+                    totalFiles: item.totalFiles || item.total_files || 1,
+                    status: item.status || 'Success',
+                    createdAt: item.createdAt || item.created_at || new Date().toISOString(),
+                  })
+                }
               }
-            }
-            const merged = Array.from(currentMap.values())
-            return merged
-          })
-        }
-      })
+              const merged = Array.from(currentMap.values())
+              if (!chosenActive && merged.length > 0) {
+                const firstId = merged[0].id
+                setActiveId(firstId)
+                const firstMsgs = getVaultMessages(firstId)
+                if (firstMsgs && firstMsgs.length > 0) {
+                  setMessages(firstMsgs)
+                } else {
+                  const { session: firstSession } = getOrCreateActiveSession(firstId)
+                  setCurrentSessionId(firstSession.id)
+                  setMessages(firstSession.messages)
+                }
+              }
+              return merged
+            })
+          }
+        })
+        .finally(() => {
+          setVaultsLoading(false)
+        })
+    } else {
+      setVaultsLoading(false)
     }
   }, [])
 
-  // Persist state only after initial load completes
+  // Persist settings, vaults, activeId
   useEffect(() => {
     if (!isHydrated.current) return
     if (settings.ownerToken) {
@@ -193,13 +221,6 @@ export default function Page() {
     if (!isHydrated.current) return
     localStorage.setItem('vault-rag-active', activeId)
   }, [activeId])
-
-  useEffect(() => {
-    if (!isHydrated.current) return
-    if (messages.length) {
-      localStorage.setItem('vault-rag-chat', JSON.stringify(messages))
-    }
-  }, [messages])
 
   // Initial connection test
   useEffect(() => {
@@ -249,12 +270,6 @@ export default function Page() {
     }
   }, [vaults, settings])
 
-  const suggestions = [
-    'Summarize my weekly notes',
-    'What tasks or action items are pending?',
-    'Find key takeaways from my latest project notes',
-  ]
-
   async function handleTestConnection() {
     setTestState('testing')
     const result = await testConnection(settings)
@@ -273,67 +288,94 @@ export default function Page() {
       content: text,
     }
 
-    setMessages((current) => [...current, userMessage])
+    const updatedWithUser = [...messages, userMessage]
+    setMessages(updatedWithUser)
+    if (activeId) {
+      saveVaultMessages(activeId, updatedWithUser)
+    }
+    if (currentSessionId) {
+      setChatSessions(updateSessionMessages(currentSessionId, updatedWithUser, activeId))
+    }
     setQuery('')
     setLoading(true)
 
     // Check configuration
     if (!settings.backendUrl || !settings.apiKey) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content:
-            '⚠️ **Backend Configuration Required**:\nPlease open **Settings** (gear icon) and set your **Backend URL** and **API Key** (`X-API-KEY`) to connect.',
-          isError: true,
-        },
-      ])
+      const errorMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content:
+          '⚠️ **Backend Configuration Required**:\nPlease open **Settings** (gear icon) and set your **Backend URL** and **API Key** (`X-API-KEY`) to connect.',
+        isError: true,
+      }
+      const nextMsgs = [...updatedWithUser, errorMsg]
+      setMessages(nextMsgs)
+      if (activeId) {
+        saveVaultMessages(activeId, nextMsgs)
+      }
+      if (currentSessionId) {
+        setChatSessions(updateSessionMessages(currentSessionId, nextMsgs, activeId))
+      }
       setLoading(false)
       return
     }
 
     if (!activeVault) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content:
-            '⚠️ **No Vault Selected**:\nPlease index or select a vault from the sidebar to ask questions.',
-          isError: true,
-        },
-      ])
+      const errorMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content:
+          '⚠️ **No Vault Selected**:\nPlease index or select a vault from the sidebar to ask questions.',
+        isError: true,
+      }
+      const nextMsgs = [...updatedWithUser, errorMsg]
+      setMessages(nextMsgs)
+      if (activeId) {
+        saveVaultMessages(activeId, nextMsgs)
+      }
+      if (currentSessionId) {
+        setChatSessions(updateSessionMessages(currentSessionId, nextMsgs, activeId))
+      }
       setLoading(false)
       return
     }
 
     if (activeVault.status === 'Processing') {
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content:
-            '⏳ **Vault is still indexing**:\nThis vault is currently processing your Markdown files. Please wait a moment until the status turns green (**Success**).',
-          isError: true,
-        },
-      ])
+      const errorMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content:
+          '⏳ **Vault is still indexing**:\nThis vault is currently processing your Markdown files. Please wait a moment until the status turns green (**Success**).',
+        isError: true,
+      }
+      const nextMsgs = [...updatedWithUser, errorMsg]
+      setMessages(nextMsgs)
+      if (activeId) {
+        saveVaultMessages(activeId, nextMsgs)
+      }
+      if (currentSessionId) {
+        setChatSessions(updateSessionMessages(currentSessionId, nextMsgs, activeId))
+      }
       setLoading(false)
       return
     }
 
     if (activeVault.status === 'Failed') {
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content:
-            '❌ **Indexing Failed**:\nThis vault failed during ingestion on the backend. Please re-upload your files as a new vault or check the backend server logs.',
-          isError: true,
-        },
-      ])
+      const errorMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content:
+          '❌ **Indexing Failed**:\nThis vault failed during ingestion on the backend. Please re-upload your files as a new vault or check the backend server logs.',
+        isError: true,
+      }
+      const nextMsgs = [...updatedWithUser, errorMsg]
+      setMessages(nextMsgs)
+      if (activeId) {
+        saveVaultMessages(activeId, nextMsgs)
+      }
+      if (currentSessionId) {
+        setChatSessions(updateSessionMessages(currentSessionId, nextMsgs, activeId))
+      }
       setLoading(false)
       return
     }
@@ -341,27 +383,36 @@ export default function Page() {
     // Call /qna
     const result = await sendQnAQuery(settings, activeVault.id, text)
 
+    let nextMessages: Message[]
     if (result.success) {
-      setMessages((current) => [
-        ...current,
+      nextMessages = [
+        ...updatedWithUser,
         {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: result.data.answer || 'No response generated.',
           sources: result.data.sources,
         },
-      ])
+      ]
       setConnected(true)
     } else {
-      setMessages((current) => [
-        ...current,
+      nextMessages = [
+        ...updatedWithUser,
         {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: `❌ **Query Failed**: ${result.error}`,
           isError: true,
         },
-      ])
+      ]
+    }
+
+    setMessages(nextMessages)
+    if (activeId) {
+      saveVaultMessages(activeId, nextMessages)
+    }
+    if (currentSessionId) {
+      setChatSessions(updateSessionMessages(currentSessionId, nextMessages, activeId))
     }
 
     setLoading(false)
@@ -411,6 +462,12 @@ export default function Page() {
       setActiveId(vault.id)
       setConnected(true)
 
+      const { session, allSessions } = createNewSession(vault.id)
+      setChatSessions(allSessions)
+      setCurrentSessionId(session.id)
+      setMessages(session.messages)
+      saveVaultMessages(vault.id, session.messages)
+
       window.setTimeout(() => {
         setUploadOpen(false)
         setFiles([])
@@ -429,20 +486,61 @@ export default function Page() {
     e?.stopPropagation()
     const updated = vaults.filter((v) => v.id !== id)
     setVaults(updated)
+    try {
+      localStorage.removeItem(`vault-rag-chat-history-${id}`)
+    } catch {}
     if (activeId === id) {
-      setActiveId(updated.length > 0 ? updated[0].id : '')
-      setMessages(initialMessages)
+      const nextActive = updated.length > 0 ? updated[0].id : ''
+      setActiveId(nextActive)
+      if (nextActive) {
+        const nextMsgs = getVaultMessages(nextActive)
+        const { session, allSessions } = getOrCreateActiveSession(nextActive)
+        setChatSessions(allSessions)
+        setCurrentSessionId(session.id)
+        setMessages(nextMsgs && nextMsgs.length > 0 ? nextMsgs : session.messages)
+      } else {
+        setCurrentSessionId('')
+        setMessages([defaultWelcomeMessage])
+      }
     }
   }
 
   function clearChat() {
-    setMessages(initialMessages)
+    setMessages([defaultWelcomeMessage])
+    if (activeId) {
+      saveVaultMessages(activeId, [defaultWelcomeMessage])
+    }
+    if (currentSessionId) {
+      const updated = resetSession(currentSessionId, activeId)
+      setChatSessions(updated)
+    }
   }
 
   function selectVault(id: string) {
+    if (id === activeId) return
+
+    // Save previous active vault chat
+    if (activeId && messages.length > 0) {
+      saveVaultMessages(activeId, messages)
+      if (currentSessionId) {
+        updateSessionMessages(currentSessionId, messages, activeId)
+      }
+    }
+
     setActiveId(id)
     setLibraryOpen(false)
-    setMessages(initialMessages)
+
+    // Load messages for selected vault
+    const savedForVault = getVaultMessages(id)
+    const { session, allSessions } = getOrCreateActiveSession(id)
+    setChatSessions(allSessions)
+    setCurrentSessionId(session.id)
+
+    if (savedForVault && savedForVault.length > 0) {
+      setMessages(savedForVault)
+    } else {
+      setMessages(session.messages)
+    }
   }
 
   function resizeInput() {
@@ -453,12 +551,13 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <div className="flex min-h-screen">
+    <main className="h-screen w-screen overflow-hidden bg-background text-foreground flex flex-col">
+      <div className="flex flex-1 h-full w-full overflow-hidden">
         {/* Desktop Sidebar */}
-        <aside className="hidden w-[280px] shrink-0 border-r border-border/70 bg-sidebar/70 lg:flex lg:flex-col">
+        <aside className="hidden w-[280px] shrink-0 border-r border-border/70 bg-sidebar/70 lg:flex lg:flex-col h-full overflow-hidden">
           <SidebarContent
             vaults={vaults}
+            loadingVaults={vaultsLoading}
             activeId={activeId}
             onSelect={selectVault}
             onDelete={deleteVault}
@@ -466,15 +565,13 @@ export default function Page() {
               setUploadError(null)
               setUploadOpen(true)
             }}
-            onSettings={() => setSettingsOpen(true)}
-            onNewChat={clearChat}
           />
         </aside>
 
         {/* Main Workspace */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col h-full overflow-hidden">
           {/* Header */}
-          <header className="flex h-[72px] items-center justify-between border-b border-border/70 px-4 sm:px-7">
+          <header className="shrink-0 flex h-[72px] items-center justify-between border-b border-border/70 px-4 sm:px-7">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 onClick={() => setLibraryOpen(true)}
@@ -540,84 +637,61 @@ export default function Page() {
               >
                 <Trash2 />
               </Button>
-
-              <Button
-                size="sm"
-                className="hidden gap-2 bg-primary text-primary-foreground shadow-[0_0_18px_rgba(124,58,237,0.2)] sm:flex"
-                onClick={() => {
-                  setUploadError(null)
-                  setUploadOpen(true)
-                }}
-              >
-                <Plus data-icon="inline-start" />
-                Index new vault
-              </Button>
             </div>
           </header>
 
           {/* Chat Messages Section */}
-          <section className="relative flex min-h-0 flex-1 flex-col">
+          <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(124,58,237,0.09),transparent_35%)]" />
 
-            <div className="relative mx-auto flex w-full max-w-4xl flex-1 flex-col overflow-y-auto px-4 py-8 sm:px-8">
-              {messages.length === 1 && (
-                <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center pb-8">
-                  <div className="mb-8 flex items-center gap-4">
-                    <div className="flex size-12 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary shadow-[0_0_24px_rgba(124,58,237,0.16)]">
-                      <Sparkles />
+            {/* Scrollable Chat Area touching right edge of viewport */}
+            <div className="flex-1 w-full overflow-y-auto min-h-0">
+              <div className="relative mx-auto flex w-full max-w-4xl flex-col px-4 py-8 sm:px-8">
+                {messages.length === 1 && (
+                  <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center pb-8">
+                    <div className="mb-6 flex items-center gap-4">
+                      <div className="flex size-12 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary shadow-[0_0_24px_rgba(124,58,237,0.16)]">
+                        <Sparkles />
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-medium uppercase tracking-[0.18em] text-primary/80">
+                          Vault Intelligence
+                        </p>
+                        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                          Ask your notes anything.
+                        </h2>
+                      </div>
                     </div>
-                    <div>
-                      <p className="mb-1 text-xs font-medium uppercase tracking-[0.18em] text-primary/80">
-                        Vault Intelligence
-                      </p>
-                      <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-                        Ask your notes anything.
-                      </h2>
-                    </div>
-                  </div>
-                  <p className="mb-7 max-w-lg text-sm leading-6 text-muted-foreground">
-                    A private hybrid retrieval layer for your Obsidian vault. Contextualize ideas,
-                    cross-reference notes, and turn scattered markdown into synthesized answers.
-                  </p>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {suggestions.map((suggestion) => (
-                      <button
-                        key={suggestion}
-                        onClick={() => sendQuery(suggestion)}
-                        className="group rounded-xl border border-border/80 bg-card/40 p-3 text-left text-xs text-muted-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
-                      >
-                        <span className="mb-4 block text-primary/70 transition group-hover:translate-x-0.5">
-                          →
-                        </span>
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-col gap-7">
-                {messages.map((message) => (
-                  <MessageRow key={message.id} message={message} />
-                ))}
-
-                {loading && (
-                  <div className="flex gap-3">
-                    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                      <Sparkles />
-                    </div>
-                    <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-border/70 bg-card/70 px-4 py-3 text-sm text-muted-foreground">
-                      <Loader2 className="animate-spin" />
-                      Searching context & reranking chunks
-                      <span className="loading-dots">...</span>
-                    </div>
+                    <p className="max-w-lg text-sm leading-6 text-muted-foreground">
+                      A private hybrid retrieval layer for your Obsidian vault. Contextualize ideas,
+                      cross-reference notes, and turn scattered markdown into synthesized answers.
+                    </p>
                   </div>
                 )}
+
+                <div className="flex flex-col gap-7">
+                  {messages.map((message) => (
+                    <MessageRow key={message.id} message={message} />
+                  ))}
+
+                  {loading && (
+                    <div className="flex gap-3">
+                      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Sparkles />
+                      </div>
+                      <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-border/70 bg-card/70 px-4 py-3 text-sm text-muted-foreground">
+                        <Loader2 className="animate-spin" />
+                        Searching context & reranking chunks
+                        <span className="loading-dots">...</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Input Box */}
-            <div className="relative mx-auto w-full max-w-3xl px-4 pb-5 sm:px-8">
+            {/* Fixed Search Bar at Bottom */}
+            <div className="shrink-0 relative mx-auto w-full max-w-3xl px-4 pb-5 sm:px-8">
               <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1.5">
                   <Archive className="size-3.5" />
@@ -677,10 +751,10 @@ export default function Page() {
                     size="icon"
                     onClick={() => sendQuery()}
                     disabled={!query.trim() || loading}
-                    className="size-8 rounded-lg bg-primary text-primary-foreground"
+                    className="size-8 rounded-lg bg-primary text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-30"
                     aria-label="Send message"
                   >
-                    {loading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+                    <ArrowUp className="size-4" />
                   </Button>
                 </div>
               </div>
@@ -693,6 +767,7 @@ export default function Page() {
       {libraryOpen && (
         <MobileLibrary
           vaults={vaults}
+          loadingVaults={vaultsLoading}
           activeId={activeId}
           onSelect={selectVault}
           onDelete={deleteVault}
@@ -748,24 +823,22 @@ export default function Page() {
 
 function SidebarContent({
   vaults,
+  loadingVaults,
   activeId,
   onSelect,
   onDelete,
   onUpload,
-  onSettings,
-  onNewChat,
 }: {
   vaults: Vault[]
+  loadingVaults?: boolean
   activeId: string
   onSelect: (id: string) => void
   onDelete: (id: string, e?: React.MouseEvent) => void
   onUpload: () => void
-  onSettings: () => void
-  onNewChat: () => void
 }) {
   return (
-    <>
-      <div className="flex h-[72px] items-center gap-3 border-b border-border/70 px-5">
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="shrink-0 flex h-[72px] items-center gap-3 border-b border-border/70 px-5">
         <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[0_0_20px_rgba(124,58,237,0.3)]">
           <Zap />
         </div>
@@ -775,14 +848,16 @@ function SidebarContent({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-6 p-4">
-        <Button onClick={onUpload} className="justify-start gap-2 bg-primary text-primary-foreground">
-          <Upload data-icon="inline-start" />
-          Index new vault
-        </Button>
+      <div className="flex flex-1 flex-col overflow-hidden min-h-0 gap-5 p-4">
+        <div className="shrink-0">
+          <Button onClick={onUpload} className="w-full justify-start gap-2 bg-primary text-primary-foreground">
+            <Upload data-icon="inline-start" />
+            Index new vault
+          </Button>
+        </div>
 
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="mb-2 flex items-center justify-between px-2">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 mb-2 flex items-center justify-between px-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               Your Vaults
             </span>
@@ -796,8 +871,35 @@ function SidebarContent({
             </button>
           </div>
 
-          <div className="flex flex-1 flex-col gap-1 overflow-y-auto pr-1">
-            {vaults.length ? (
+          <div className="flex flex-1 flex-col gap-1 overflow-y-auto min-h-0 pr-1">
+            {loadingVaults ? (
+              <div className="flex flex-col gap-2 p-1">
+                <div className="flex items-center gap-2.5 rounded-lg border border-border/40 bg-card/40 p-2 animate-pulse">
+                  <div className="size-4 shrink-0 rounded bg-muted/80" />
+                  <div className="flex-1 space-y-1.5 min-w-0">
+                    <div className="h-3 w-3/4 rounded bg-muted/80" />
+                    <div className="h-2 w-1/2 rounded bg-muted/60" />
+                  </div>
+                  <div className="size-2 rounded-full bg-amber-400/40" />
+                </div>
+                <div className="flex items-center gap-2.5 rounded-lg border border-border/40 bg-card/40 p-2 animate-pulse opacity-70">
+                  <div className="size-4 shrink-0 rounded bg-muted/80" />
+                  <div className="flex-1 space-y-1.5 min-w-0">
+                    <div className="h-3 w-2/3 rounded bg-muted/80" />
+                    <div className="h-2 w-1/3 rounded bg-muted/60" />
+                  </div>
+                  <div className="size-2 rounded-full bg-muted/60" />
+                </div>
+                <div className="flex items-center gap-2.5 rounded-lg border border-border/40 bg-card/40 p-2 animate-pulse opacity-40">
+                  <div className="size-4 shrink-0 rounded bg-muted/80" />
+                  <div className="flex-1 space-y-1.5 min-w-0">
+                    <div className="h-3 w-1/2 rounded bg-muted/80" />
+                    <div className="h-2 w-1/4 rounded bg-muted/60" />
+                  </div>
+                  <div className="size-2 rounded-full bg-muted/60" />
+                </div>
+              </div>
+            ) : vaults.length ? (
               vaults.map((vault) => (
                 <div
                   key={vault.id}
@@ -847,19 +949,8 @@ function SidebarContent({
             )}
           </div>
         </div>
-
-        <div className="mt-auto flex flex-col gap-1 border-t border-border/70 pt-4">
-          <button className="sidebar-action" onClick={onNewChat}>
-            <MessageSquare />
-            New chat
-          </button>
-          <button className="sidebar-action" onClick={onSettings}>
-            <Settings />
-            Settings
-          </button>
-        </div>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -986,6 +1077,7 @@ function MessageRow({ message }: { message: Message }) {
 
 function MobileLibrary({
   vaults,
+  loadingVaults,
   activeId,
   onSelect,
   onDelete,
@@ -993,6 +1085,7 @@ function MobileLibrary({
   onClose,
 }: {
   vaults: Vault[]
+  loadingVaults?: boolean
   activeId: string
   onSelect: (id: string) => void
   onDelete: (id: string, e?: React.MouseEvent) => void
@@ -1010,12 +1103,11 @@ function MobileLibrary({
         </div>
         <SidebarContent
           vaults={vaults}
+          loadingVaults={loadingVaults}
           activeId={activeId}
           onSelect={onSelect}
           onDelete={onDelete}
           onUpload={onUpload}
-          onSettings={onClose}
-          onNewChat={onClose}
         />
       </div>
     </div>
@@ -1039,8 +1131,20 @@ function SettingsModal({
   onTest: () => void
   onClose: () => void
 }) {
+  const initialSettingsRef = useRef<string>(JSON.stringify(settings))
+
+  function handleCloseOrDone() {
+    const currentSettingsStr = JSON.stringify(settings)
+    if (currentSettingsStr !== initialSettingsRef.current) {
+      localStorage.setItem('vault-rag-settings', currentSettingsStr)
+      window.location.reload()
+    } else {
+      onClose()
+    }
+  }
+
   return (
-    <Modal title="Connection Settings" icon={<Settings />} onClose={onClose}>
+    <Modal title="Connection Settings" icon={<Settings />} onClose={handleCloseOrDone}>
       <p className="mb-5 text-xs leading-5 text-muted-foreground">
         Configure the FastAPI RAG backend that processes your vault embeddings and queries.
       </p>
@@ -1117,7 +1221,7 @@ function SettingsModal({
       </div>
 
       <div className="mt-6 flex justify-end gap-2">
-        <Button variant="default" onClick={onClose}>
+        <Button variant="default" onClick={handleCloseOrDone}>
           Done
         </Button>
       </div>
