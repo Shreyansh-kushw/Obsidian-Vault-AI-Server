@@ -55,6 +55,7 @@ class Chunks(Base):
 class Jobs(Base):
     __tablename__ = "jobs"
     job_id: Mapped[str] = mapped_column(String, primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(255), nullable=True)
     owner_token: Mapped[str] = mapped_column(String, index=True, nullable=False)
     total_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

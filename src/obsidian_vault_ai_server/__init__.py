@@ -12,6 +12,7 @@ from fastapi import (
     Request,
     UploadFile,
     status,
+    Form,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -84,6 +85,7 @@ async def upload_file(
     db: Annotated[AsyncSession, Depends(get_db)],
     api_key: Annotated[str, Depends(verify_api_key)],
     owner_token: Annotated[str, Depends(get_owner_token)],
+    job_name: Annotated[str | None, Form()] = None,
 ):
     """Endpoint to upload and ingest documents"""
 
@@ -91,6 +93,7 @@ async def upload_file(
 
     new_job = Jobs(
         job_id=job_id,
+        job_name=job_name,
         owner_token=owner_token,
         total_files=len(files),
     )
@@ -195,7 +198,7 @@ async def list_jobs(
     return [
         {
             "id": job.job_id,
-            "name": f"Vault {job.job_id[:8]}",
+            "name": f"Vault {job.job_name if job.job_name else job.job_id[:8]}",
             "totalFiles": job.total_files,
             "status": job.status,
             "succeeded": job.succeeded,
