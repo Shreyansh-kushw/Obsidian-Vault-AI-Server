@@ -198,7 +198,7 @@ async def list_jobs(
     return [
         {
             "id": job.job_id,
-            "name": f"Vault {job.job_name if job.job_name else job.job_id[:8]}",
+            "name": f"{job.job_name if job.job_name else job.job_id[:8]}",
             "totalFiles": job.total_files,
             "status": job.status,
             "succeeded": job.succeeded,

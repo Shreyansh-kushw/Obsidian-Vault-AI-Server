@@ -172,7 +172,7 @@ export default function Page() {
                 if (!currentMap.has(id)) {
                   currentMap.set(id, {
                     id,
-                    name: item.name || `Vault ${id.slice(0, 8)}`,
+                    name: item.name || item.job_name || `Vault ${id.slice(0, 8)}`,
                     totalFiles: item.totalFiles || item.total_files || 1,
                     status: item.status || 'Success',
                     createdAt: item.createdAt || item.created_at || new Date().toISOString(),
@@ -430,7 +430,7 @@ export default function Page() {
     setUploadError(null)
   }
 
-  async function handleUpload() {
+  async function handleUpload(customName?: string) {
     if (!files.length) return
     setUploading(true)
     setUploadError(null)
@@ -440,19 +440,21 @@ export default function Page() {
       setUploadProgress((prev) => (prev < 85 ? prev + 15 : prev))
     }, 400)
 
-    const result = await uploadVaultFiles(settings, files)
+    const detectedName =
+      files[0].webkitRelativePath?.split('/')[0] ||
+      files[0].name.replace(/\.md$/i, '') ||
+      'Notes Vault'
+    const finalName = customName?.trim() || detectedName
+
+    const result = await uploadVaultFiles(settings, files, finalName)
     clearInterval(timer)
 
     if (result.success) {
       setUploadProgress(100)
-      const folderName =
-        files[0].webkitRelativePath?.split('/')[0] ||
-        files[0].name.replace(/\.md$/i, '') ||
-        'Notes Vault'
 
       const vault: Vault = {
         id: result.data.job_id,
-        name: folderName,
+        name: finalName,
         totalFiles: files.length,
         status: 'Processing',
         createdAt: new Date().toISOString(),
@@ -1248,12 +1250,25 @@ function UploadModal({
   hasApiKey: boolean
   onFiles: (files: FileList | File[]) => void
   onClearFiles: () => void
-  onUpload: () => void
+  onUpload: (customName?: string) => void
   onOpenSettings: () => void
   onClose: () => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+  const [vaultName, setVaultName] = useState('')
+
+  useEffect(() => {
+    if (files.length > 0) {
+      const defaultName =
+        files[0].webkitRelativePath?.split('/')[0] ||
+        files[0].name.replace(/\.md$/i, '') ||
+        'Notes Vault'
+      setVaultName(defaultName)
+    } else {
+      setVaultName('')
+    }
+  }, [files])
 
   return (
     <Modal title="Index a New Vault" icon={<CloudUpload />} onClose={onClose}>
@@ -1347,30 +1362,41 @@ function UploadModal({
       </div>
 
       {files.length > 0 && (
-        <div className="mt-4 rounded-xl border border-border bg-muted/20 p-3">
-          <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="font-medium">
-              {files.length} Markdown file{files.length === 1 ? '' : 's'} selected
-            </span>
-            <button
-              onClick={onClearFiles}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              Clear
-            </button>
-          </div>
-          <div className="flex max-h-24 flex-col gap-1 overflow-y-auto pr-1 text-xs text-muted-foreground">
-            {files.slice(0, 8).map((file, i) => (
-              <span key={`${file.name}-${i}`} className="flex items-center gap-2 truncate">
-                <FileText className="size-3.5 shrink-0 text-primary/70" />
-                <span className="truncate">{file.name}</span>
+        <div className="mt-4 flex flex-col gap-3">
+          <label className="field-label">
+            Vault Name
+            <input
+              value={vaultName}
+              onChange={(e) => setVaultName(e.target.value)}
+              placeholder="e.g. My Obsidian Notes"
+            />
+          </label>
+
+          <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div className="mb-2 flex items-center justify-between text-xs">
+              <span className="font-medium">
+                {files.length} Markdown file{files.length === 1 ? '' : 's'} selected
               </span>
-            ))}
-            {files.length > 8 && (
-              <span className="text-[10px] italic text-muted-foreground">
-                + {files.length - 8} more files...
-              </span>
-            )}
+              <button
+                onClick={onClearFiles}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="flex max-h-24 flex-col gap-1 overflow-y-auto pr-1 text-xs text-muted-foreground">
+              {files.slice(0, 8).map((file, i) => (
+                <span key={`${file.name}-${i}`} className="flex items-center gap-2 truncate">
+                  <FileText className="size-3.5 shrink-0 text-primary/70" />
+                  <span className="truncate">{file.name}</span>
+                </span>
+              ))}
+              {files.length > 8 && (
+                <span className="text-[10px] italic text-muted-foreground">
+                  + {files.length - 8} more files...
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1394,7 +1420,7 @@ function UploadModal({
         <Button variant="ghost" onClick={onClose} disabled={uploading}>
           Cancel
         </Button>
-        <Button onClick={onUpload} disabled={!files.length || uploading}>
+        <Button onClick={() => onUpload(vaultName)} disabled={!files.length || uploading}>
           {uploading ? <Loader2 className="animate-spin" /> : <Upload />}
           {uploading ? 'Ingesting Vault...' : 'Start Ingestion'}
         </Button>

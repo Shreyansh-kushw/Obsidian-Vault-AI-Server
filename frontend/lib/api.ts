@@ -130,7 +130,8 @@ export async function testConnection(
  */
 export async function uploadVaultFiles(
   settings: SettingsState,
-  files: File[]
+  files: File[],
+  jobName?: string
 ): Promise<ApiResult<UploadResponse>> {
   if (!settings.backendUrl) {
     return { success: false, error: 'Please set your Backend URL in Settings.' }
@@ -144,6 +145,9 @@ export async function uploadVaultFiles(
 
   const base = normalizeUrl(settings.backendUrl)
   const formData = new FormData()
+  if (jobName) {
+    formData.append('job_name', jobName)
+  }
   files.forEach((file) => {
     formData.append('files', file)
   })
@@ -284,10 +288,12 @@ export async function sendQnAQuery(
 export type BackendJobItem = {
   id?: string
   job_id?: string
+  job_name?: string
   name?: string
   total_files?: number
   totalFiles?: number
   status: VaultStatus
+  succeeded?: number
   created_at?: string
   createdAt?: string
 }
