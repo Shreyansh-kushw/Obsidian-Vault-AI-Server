@@ -171,3 +171,7 @@ async def get_status(
 
     return job.status
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
