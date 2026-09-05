@@ -280,3 +280,48 @@ export async function sendQnAQuery(
     return { success: false, error: `Could not reach RAG server: ${message}` }
   }
 }
+
+export type BackendJobItem = {
+  id?: string
+  job_id?: string
+  name?: string
+  total_files?: number
+  totalFiles?: number
+  status: VaultStatus
+  created_at?: string
+  createdAt?: string
+}
+
+/**
+ * Fetch past jobs / vaults from backend if GET /jobs endpoint is implemented.
+ */
+export async function fetchBackendJobs(
+  settings: SettingsState
+): Promise<ApiResult<BackendJobItem[]>> {
+  if (!settings.backendUrl || !settings.apiKey || !settings.ownerToken) {
+    return { success: false, error: 'Missing settings for fetching jobs' }
+  }
+
+  const base = normalizeUrl(settings.backendUrl)
+
+  try {
+    const response = await fetch(`${base}/jobs`, {
+      method: 'GET',
+      headers: getHeaders(settings),
+    })
+
+    if (!response.ok) {
+      return { success: false, error: 'Endpoint not available', statusCode: response.status }
+    }
+
+    const data = await response.json()
+    if (Array.isArray(data)) {
+      return { success: true, data }
+    }
+    return { success: false, error: 'Unexpected response format' }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Network error'
+    return { success: false, error: message }
+  }
+}
+

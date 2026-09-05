@@ -34,6 +34,7 @@ import {
 import { Button } from '@/components/ui/button'
 import {
   checkJobStatus,
+  fetchBackendJobs,
   getHeaders,
   sendQnAQuery,
   testConnection,
@@ -114,13 +115,14 @@ export default function Page() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const isHydrated = useRef(false)
 
   const activeVault = useMemo(
     () => vaults.find((vault) => vault.id === activeId),
     [vaults, activeId]
   )
 
-  // Load from local storage
+  // Load from local storage and backend
   useEffect(() => {
     const loaded = readStore<SettingsState>('vault-rag-settings', defaultSettings)
     if (!loaded.ownerToken) {
@@ -145,24 +147,55 @@ export default function Page() {
     }
 
     setMessages(readStore<Message[]>('vault-rag-chat', initialMessages))
+    isHydrated.current = true
+
+    // Try syncing any jobs from backend if GET /jobs is available
+    if (loaded.backendUrl && loaded.apiKey && loaded.ownerToken) {
+      fetchBackendJobs(loaded).then((res) => {
+        if (res.success && res.data.length > 0) {
+          setVaults((current) => {
+            const currentMap = new Map(current.map((v) => [v.id, v]))
+            for (const item of res.data) {
+              const id = item.id || item.job_id || ''
+              if (!id) continue
+              if (!currentMap.has(id)) {
+                currentMap.set(id, {
+                  id,
+                  name: item.name || `Vault ${id.slice(0, 8)}`,
+                  totalFiles: item.totalFiles || item.total_files || 1,
+                  status: item.status || 'Success',
+                  createdAt: item.createdAt || item.created_at || new Date().toISOString(),
+                })
+              }
+            }
+            const merged = Array.from(currentMap.values())
+            return merged
+          })
+        }
+      })
+    }
   }, [])
 
-  // Persist state
+  // Persist state only after initial load completes
   useEffect(() => {
+    if (!isHydrated.current) return
     if (settings.ownerToken) {
       localStorage.setItem('vault-rag-settings', JSON.stringify(settings))
     }
   }, [settings])
 
   useEffect(() => {
+    if (!isHydrated.current) return
     localStorage.setItem('vault-rag-vaults', JSON.stringify(vaults))
   }, [vaults])
 
   useEffect(() => {
+    if (!isHydrated.current) return
     localStorage.setItem('vault-rag-active', activeId)
   }, [activeId])
 
   useEffect(() => {
+    if (!isHydrated.current) return
     if (messages.length) {
       localStorage.setItem('vault-rag-chat', JSON.stringify(messages))
     }
@@ -830,8 +863,59 @@ function SidebarContent({
   )
 }
 
+function CodeBlock({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) {
+  const [copied, setCopied] = useState(false)
+
+  const extractText = (node: React.ReactNode): string => {
+    if (typeof node === 'string') return node
+    if (typeof node === 'number') return String(node)
+    if (Array.isArray(node)) return node.map(extractText).join('')
+    if (node && typeof node === 'object' && 'props' in node) {
+      // @ts-expect-error accessing child props
+      return extractText(node.props?.children)
+    }
+    return ''
+  }
+
+  const rawCode = extractText(children).replace(/\n$/, '')
+
+  return (
+    <div className="relative my-3 overflow-hidden rounded-lg border border-border bg-background/70">
+      <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <Code2 className="size-3" />
+          code
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            if (rawCode) {
+              navigator.clipboard.writeText(rawCode)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 2000)
+            }
+          }}
+          className="flex items-center gap-1 hover:text-foreground"
+        >
+          {copied ? (
+            <>
+              <Check className="size-3 text-emerald-400" /> Copied
+            </>
+          ) : (
+            <>
+              <Copy className="size-3" /> Copy
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 text-xs" {...props}>
+        {children}
+      </pre>
+    </div>
+  )
+}
+
 function MessageRow({ message }: { message: Message }) {
-  const [copied, setCopied] = useState('')
   const isUser = message.role === 'user'
 
   // Deduplicate sources by filename
@@ -868,40 +952,12 @@ function MessageRow({ message }: { message: Message }) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
+              pre: CodeBlock,
               code({ className, children, ...props }) {
-                const code = String(children).replace(/\n$/, '')
                 return (
-                  <div className="relative my-3 overflow-hidden rounded-lg border border-border bg-background/70">
-                    <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Code2 className="size-3" />
-                        code
-                      </span>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(code)
-                          setCopied(code)
-                          setTimeout(() => setCopied(''), 2000)
-                        }}
-                        className="flex items-center gap-1 hover:text-foreground"
-                      >
-                        {copied === code ? (
-                          <>
-                            <Check className="size-3 text-emerald-400" /> Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="size-3" /> Copy
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <pre className="overflow-x-auto p-3 text-xs">
-                      <code className={className} {...props}>
-                        {children}
-                      </code>
-                    </pre>
-                  </div>
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
                 )
               },
             }}
