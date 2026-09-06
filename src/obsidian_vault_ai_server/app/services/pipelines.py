@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 import obsidiantools.api as o_api
 
@@ -107,34 +108,43 @@ async def ingestion_pipeline(vault_id: str, vault_dir: Path):
 
 
 async def retrieval_pipeline(query: str, job_id: str, db: AsyncSession):
-    """Main retrieval pipeline"""
+    """2-stage graph-aware retrieval pipeline:
 
-    # generating embeddings for the query
-    query_embedding = embedder.generate_embeddings(query)
-    if hasattr(query_embedding, "tolist"):
-        query_embedding = query_embedding.tolist()
+    1. Primary Search: Top 20 Vector + Top 20 Keyword -> RRF -> Rerank to Top 5
+    2. Graph Expansion: Extract wikilinks and backlinks from top 5 notes, deduplicate
+    3. Connected Search: Top 20 Vector + Top 20 Keyword on connected notes -> RRF -> Rerank to Top 5
+    4. Generation: Pass separated primary and connected contexts to LLM
+    """
 
+    # Ensure vault exists
     stmt = select(Vaults).where(Vaults.vault_id == job_id).exists()
-    job_exists = await db.scalar(select(stmt))
+    vault_exists = await db.scalar(select(stmt))
 
-    if not job_exists:
+    if not vault_exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Vault ID not found!"
         )
 
-    # getting all the database fields with the given vault_id
+    # 1. Primary Hybrid Search
+    query_embedding = embedder.generate_embeddings(query)
+    if hasattr(query_embedding, "tolist"):
+        query_embedding = query_embedding.tolist()
+
+    # Vector search top 20
     vector_search = await db.execute(
         select(ObsidianChunks)
+        .options(selectinload(ObsidianChunks.note))
         .where(ObsidianChunks.vault_id == job_id)
         .where(ObsidianChunks.embedding.cosine_distance(query_embedding) < 0.5)
         .order_by(ObsidianChunks.embedding.cosine_distance(query_embedding))
         .limit(20)
     )
-
     vector_search_results = vector_search.scalars().all()
 
+    # Keyword search top 20
     keyword_search = await db.execute(
         select(ObsidianChunks)
+        .options(selectinload(ObsidianChunks.note))
         .where(ObsidianChunks.vault_id == job_id)
         .where(
             ObsidianChunks.chunk_tsv.op("@@")(
@@ -149,17 +159,100 @@ async def retrieval_pipeline(query: str, job_id: str, db: AsyncSession):
         )
         .limit(20)
     )
-
     keyword_search_results = keyword_search.scalars().all()
 
+    # Reciprocal Rank Fusion
     fused_chunks = reciprocal_rank_fusion(
         [vector_search_results, keyword_search_results]
     )
 
-    if fused_chunks:
-        top_chunks = rerank(query, fused_chunks)
-    else:
-        top_chunks = []
+    # Rerank to top 5 primary chunks
+    primary_chunks = rerank(query, fused_chunks, top_k=5)
 
-    response = await generate_response(chunks=top_chunks, question=query)
+    # 2. Graph Expansion: find connected notes (wikilinks and backlinks)
+    connected_chunks = []
+    if primary_chunks:
+        primary_note_ids = {c.note_id for c in primary_chunks if c.note_id}
+
+        notes_stmt = select(ObsidianNotes).where(
+            ObsidianNotes.vault_id == job_id,
+            ObsidianNotes.id.in_(primary_note_ids),
+        )
+        notes_res = await db.execute(notes_stmt)
+        primary_parent_notes = notes_res.scalars().all()
+
+        # Deduplicate all connected note names from wikilinks & backlinks
+        connected_note_names = set()
+        for note in primary_parent_notes:
+            for link in note.wikilinks or []:
+                if link and link.strip():
+                    connected_note_names.add(link.strip())
+            for link in note.backlinks or []:
+                if link and link.strip():
+                    connected_note_names.add(link.strip())
+
+        # 3. Secondary Search on Connected Notes
+        if connected_note_names:
+            conn_notes_stmt = select(ObsidianNotes.id).where(
+                ObsidianNotes.vault_id == job_id,
+                ObsidianNotes.note_name.in_(list(connected_note_names)),
+            )
+            conn_notes_res = await db.execute(conn_notes_stmt)
+            connected_note_ids = conn_notes_res.scalars().all()
+
+            if connected_note_ids:
+                conn_vector_search = await db.execute(
+                    select(ObsidianChunks)
+                    .options(selectinload(ObsidianChunks.note))
+                    .where(ObsidianChunks.vault_id == job_id)
+                    .where(ObsidianChunks.note_id.in_(connected_note_ids))
+                    .where(
+                        ObsidianChunks.embedding.cosine_distance(
+                            query_embedding
+                        )
+                        < 0.5
+                    )
+                    .order_by(
+                        ObsidianChunks.embedding.cosine_distance(
+                            query_embedding
+                        )
+                    )
+                    .limit(20)
+                )
+                conn_vector_results = conn_vector_search.scalars().all()
+
+                conn_keyword_search = await db.execute(
+                    select(ObsidianChunks)
+                    .options(selectinload(ObsidianChunks.note))
+                    .where(ObsidianChunks.vault_id == job_id)
+                    .where(ObsidianChunks.note_id.in_(connected_note_ids))
+                    .where(
+                        ObsidianChunks.chunk_tsv.op("@@")(
+                            func.websearch_to_tsquery("english", query)
+                        )
+                    )
+                    .order_by(
+                        func.ts_rank_cd(
+                            ObsidianChunks.chunk_tsv,
+                            func.websearch_to_tsquery("english", query),
+                        ).desc()
+                    )
+                    .limit(20)
+                )
+                conn_keyword_results = conn_keyword_search.scalars().all()
+
+                fused_connected_chunks = reciprocal_rank_fusion(
+                    [conn_vector_results, conn_keyword_results]
+                )
+
+                connected_chunks = rerank(
+                    query, fused_connected_chunks, top_k=5
+                )
+
+    # 4. Generate LLM response with separated primary and connected context
+    response = await generate_response(
+        primary_chunks=primary_chunks,
+        connected_chunks=connected_chunks,
+        question=query,
+    )
     return response
