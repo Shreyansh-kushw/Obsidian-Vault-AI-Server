@@ -13,9 +13,11 @@ import {
   CloudUpload,
   Code2,
   Copy,
+  ExternalLink,
   FileText,
   FolderOpen,
   FolderUp,
+  Info,
   KeyRound,
   Loader2,
   Menu,
@@ -1276,6 +1278,22 @@ function UploadModal({
         Select Markdown notes or an entire exported Obsidian folder to index into the vector
         database.
       </p>
+
+      {/* Info banner for automated vault syncing */}
+      <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-sky-200">
+        <Info className="mt-0.5 size-4 shrink-0 text-sky-400" />
+        <div className="flex-1 leading-relaxed">
+          <span>Tip: Want automatic sync? Set up a vault watcher to automatically push updates to your server. </span>
+          <a
+            href="https://github.com/example/obsidian-vault-watcher-sync"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-medium text-sky-300 underline underline-offset-2 hover:text-sky-100"
+          >
+            Learn more <ExternalLink className="size-3" />
+          </a>
+        </div>
+      </div>
 
       {!hasApiKey && (
         <div className="mb-4 flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
