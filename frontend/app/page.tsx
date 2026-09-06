@@ -35,10 +35,12 @@ import { Button } from '@/components/ui/button'
 import {
   checkJobStatus,
   fetchBackendJobs,
+  fetchDiscoveredVaults,
   getHeaders,
   sendQnAQuery,
   testConnection,
   uploadVaultFiles,
+  type DiscoveredVault,
   type SettingsState,
   type SourceItem,
   type VaultStatus,
@@ -812,6 +814,7 @@ export default function Page() {
       {/* Upload Modal */}
       {uploadOpen && (
         <UploadModal
+          settings={settings}
           files={files}
           uploading={uploading}
           progress={uploadProgress}
@@ -1246,6 +1249,7 @@ function SettingsModal({
 }
 
 function UploadModal({
+  settings,
   files,
   uploading,
   progress,
@@ -1257,6 +1261,7 @@ function UploadModal({
   onOpenSettings,
   onClose,
 }: {
+  settings: SettingsState
   files: File[]
   uploading: boolean
   progress: number
@@ -1271,6 +1276,18 @@ function UploadModal({
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [vaultName, setVaultName] = useState('')
   const [localVaultPath, setLocalVaultPath] = useState('')
+  const [discoveredVaults, setDiscoveredVaults] = useState<DiscoveredVault[]>([])
+
+  // Fetch discovered vaults from server on mount
+  useEffect(() => {
+    fetchDiscoveredVaults(settings)
+      .then((res) => {
+        if (res.success && res.data.length > 0) {
+          setDiscoveredVaults(res.data)
+        }
+      })
+      .catch(() => {})
+  }, [settings])
 
   useEffect(() => {
     if (files.length > 0) {
@@ -1279,11 +1296,25 @@ function UploadModal({
         files[0].name.replace(/\.md$/i, '') ||
         'Notes Vault'
       setVaultName(defaultName)
+
+      // Try matching detected folder name with discovered vaults
+      const matched = discoveredVaults.find(
+        (dv) =>
+          dv.name.toLowerCase() === defaultName.toLowerCase() ||
+          defaultName.toLowerCase().includes(dv.name.toLowerCase()) ||
+          dv.name.toLowerCase().includes(defaultName.toLowerCase())
+      )
+
+      if (matched) {
+        setLocalVaultPath(matched.path)
+      } else if (discoveredVaults.length === 1) {
+        setLocalVaultPath(discoveredVaults[0].path)
+      }
     } else {
       setVaultName('')
       setLocalVaultPath('')
     }
-  }, [files])
+  }, [files, discoveredVaults])
 
   return (
     <Modal title="Index Obsidian Vault" icon={<CloudUpload />} onClose={onClose}>
@@ -1291,21 +1322,46 @@ function UploadModal({
         Select your Obsidian vault directory to ingest notes, graph relationships, and chunks into the server.
       </p>
 
-      {/* Info banner for automated vault syncing */}
-      <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-sky-200">
-        <Info className="mt-0.5 size-4 shrink-0 text-sky-400" />
-        <div className="flex-1 leading-relaxed">
-          <span>Tip: Want automatic sync? Set up a vault watcher to automatically push updates to your server. </span>
-          <a
-            href="https://github.com/example/obsidian-vault-watcher-sync"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-medium text-sky-300 underline underline-offset-2 hover:text-sky-100"
-          >
-            Learn more <ExternalLink className="size-3" />
-          </a>
+      {/* Detected Obsidian Vaults Fast-Selector */}
+      {discoveredVaults.length > 0 && (
+        <div className="mb-4 rounded-xl border border-violet-500/30 bg-violet-500/10 p-3 text-xs">
+          <div className="mb-2 flex items-center justify-between text-violet-300 font-semibold">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="size-3.5 text-violet-400" />
+              Detected Obsidian Vaults:
+            </span>
+            <span className="text-[10px] text-muted-foreground font-normal">1-click select</span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {discoveredVaults.map((dv) => {
+              const isSelected = localVaultPath === dv.path
+              return (
+                <button
+                  key={dv.path}
+                  type="button"
+                  onClick={() => {
+                    setLocalVaultPath(dv.path)
+                    if (!vaultName || vaultName === 'Notes Vault') {
+                      setVaultName(dv.name)
+                    }
+                  }}
+                  className={`flex items-center justify-between rounded-lg p-2 text-left transition border ${
+                    isSelected
+                      ? 'bg-violet-600/30 border-violet-400/50 text-white'
+                      : 'bg-card/60 border-border/40 text-muted-foreground hover:bg-card hover:text-foreground'
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-xs text-foreground">{dv.name}</p>
+                    <p className="truncate font-mono text-[10px] text-muted-foreground">{dv.path}</p>
+                  </div>
+                  {isSelected && <Check className="size-3.5 text-emerald-400 shrink-0 ml-2" />}
+                </button>
+              )
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {!hasApiKey && (
         <div className="mb-4 flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
@@ -1386,12 +1442,12 @@ function UploadModal({
           <label className="field-label">
             <span className="flex items-center justify-between">
               <span>Local Vault Path</span>
-              <span className="text-[10px] font-normal text-muted-foreground">(for auto-sync & file watcher)</span>
+              <span className="text-[10px] font-normal text-emerald-400/90">✨ Auto-detected & editable</span>
             </span>
             <input
               value={localVaultPath}
               onChange={(e) => setLocalVaultPath(e.target.value)}
-              placeholder="e.g. /home/username/Documents/MyVault"
+              placeholder="e.g. /home/username/Documents/Obsidian/MyVault"
             />
           </label>
 

@@ -256,3 +256,185 @@ async def retrieval_pipeline(query: str, job_id: str, db: AsyncSession):
         question=query,
     )
     return response
+
+
+# Incremental Single-File Sync and Deletion Pipelines
+
+
+def extract_frontmatter(text: str) -> dict:
+    """Extract YAML frontmatter key-value pairs from markdown header"""
+    import re
+    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", text, re.DOTALL)
+    if not match:
+        return {}
+    fm_text = match.group(1)
+    result = {}
+    for line in fm_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            result[k.strip()] = v.strip().strip('"\'')
+    return result
+
+
+def extract_wikilinks(text: str) -> list[str]:
+    """Extract unique wikilink targets from markdown text"""
+    import re
+    matches = re.findall(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]", text)
+    seen = set()
+    cleaned = []
+    for m in matches:
+        target = m.strip()
+        if target and target not in seen:
+            seen.add(target)
+            cleaned.append(target)
+    return cleaned
+
+
+def extract_tags(text: str) -> list[str]:
+    """Extract hashtag labels from markdown text"""
+    import re
+    matches = re.findall(r"(?:^|\s)#([a-zA-Z0-9_\-\/]+)", text)
+    seen = set()
+    cleaned = []
+    for m in matches:
+        tag = m.strip()
+        if tag and tag not in seen:
+            seen.add(tag)
+            cleaned.append(tag)
+    return cleaned
+
+
+async def sync_single_file(
+    vault_id: str,
+    rel_filepath: str,
+    file_content: str,
+    db: AsyncSession,
+) -> dict:
+    """Sync an individual modified or newly created markdown file in the vault."""
+    vault = await db.get(Vaults, vault_id)
+    if not vault:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vault not found")
+
+    clean_relpath = rel_filepath.replace("\\", "/").lstrip("/")
+    note_name = Path(clean_relpath).stem
+
+    # Extract frontmatter, wikilinks, tags
+    wikilinks = extract_wikilinks(file_content)
+    tags = extract_tags(file_content)
+    front_matter = extract_frontmatter(file_content)
+
+    # Check if note already exists in this vault
+    stmt = select(ObsidianNotes).where(
+        ObsidianNotes.vault_id == vault_id,
+        (ObsidianNotes.rel_filepath == clean_relpath) | (ObsidianNotes.note_name == note_name),
+    )
+    result = await db.execute(stmt)
+    note_entry = result.scalars().first()
+
+    if note_entry:
+        note_entry.note_name = note_name
+        note_entry.rel_filepath = clean_relpath
+        note_entry.wikilinks = wikilinks
+        note_entry.tags = tags
+        note_entry.front_matter = front_matter
+
+        # Delete old chunks for this note
+        del_stmt = select(ObsidianChunks).where(ObsidianChunks.note_id == note_entry.id)
+        old_chunks = (await db.execute(del_stmt)).scalars().all()
+        for c in old_chunks:
+            await db.delete(c)
+        await db.flush()
+    else:
+        note_entry = ObsidianNotes(
+            vault_id=vault_id,
+            note_name=note_name,
+            rel_filepath=clean_relpath,
+            wikilinks=wikilinks,
+            backlinks=[],
+            tags=tags,
+            front_matter=front_matter,
+        )
+        db.add(note_entry)
+        await db.flush()
+
+    # Chunk text & generate embeddings
+    chunks = chunk_text(file_content)
+    chunks_created = 0
+    if chunks:
+        embeddings = embedder.generate_embeddings(chunks)
+        if hasattr(embeddings, "tolist"):
+            embeddings = embeddings.tolist()
+
+        for chunk_idx, (chunk_str, emb) in enumerate(zip(chunks, embeddings)):
+            chunk_entry = ObsidianChunks(
+                vault_id=vault_id,
+                note_id=note_entry.id,
+                chunk_index=chunk_idx,
+                chunk_text=chunk_str,
+                embedding=emb,
+            )
+            db.add(chunk_entry)
+            chunks_created += 1
+
+    # Update counts
+    count_stmt = select(func.count(ObsidianNotes.id)).where(ObsidianNotes.vault_id == vault_id)
+    total_count = await db.scalar(count_stmt) or 0
+    vault.total_files = total_count
+    vault.succeeded = total_count
+    vault.status = "Success"
+
+    await db.commit()
+    return {
+        "status": "synced",
+        "note_name": note_name,
+        "rel_filepath": clean_relpath,
+        "chunks_count": chunks_created,
+        "total_files": total_count,
+    }
+
+
+async def delete_single_file(
+    vault_id: str,
+    rel_filepath: str,
+    db: AsyncSession,
+) -> dict:
+    """Delete an individual note and its chunks from the database."""
+    vault = await db.get(Vaults, vault_id)
+    if not vault:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vault not found")
+
+    clean_relpath = rel_filepath.replace("\\", "/").lstrip("/")
+    note_name = Path(clean_relpath).stem
+
+    stmt = select(ObsidianNotes).where(
+        ObsidianNotes.vault_id == vault_id,
+        (ObsidianNotes.rel_filepath == clean_relpath) | (ObsidianNotes.note_name == note_name),
+    )
+    result = await db.execute(stmt)
+    note_entry = result.scalars().first()
+
+    if not note_entry:
+        return {
+            "status": "not_found",
+            "message": f"Note {clean_relpath} not found in database.",
+        }
+
+    await db.delete(note_entry)  # Cascade will delete all chunks
+    await db.flush()
+
+    count_stmt = select(func.count(ObsidianNotes.id)).where(ObsidianNotes.vault_id == vault_id)
+    total_count = await db.scalar(count_stmt) or 0
+    vault.total_files = total_count
+    vault.succeeded = total_count
+
+    await db.commit()
+    return {
+        "status": "deleted",
+        "note_name": note_name,
+        "rel_filepath": clean_relpath,
+        "total_files": total_count,
+    }
+

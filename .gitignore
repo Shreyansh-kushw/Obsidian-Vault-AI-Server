@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Standalone Client Sub-repo
+Obsidian-Vault-AI-Client/
+
+
 # C extensions
 *.so
 

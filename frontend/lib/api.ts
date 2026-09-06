@@ -337,3 +337,77 @@ export async function fetchBackendJobs(
   }
 }
 
+/**
+ * Update the registered local vault path for an existing vault in the database.
+ */
+export async function updateVaultPath(
+  settings: SettingsState,
+  vaultId: string,
+  localVaultPath: string
+): Promise<ApiResult<{ status: string; local_vault_path: string }>> {
+  if (!settings.backendUrl || !settings.apiKey || !settings.ownerToken) {
+    return { success: false, error: 'Missing settings for updating vault path' }
+  }
+
+  const base = normalizeUrl(settings.backendUrl)
+
+  try {
+    const response = await fetch(`${base}/vaults/${vaultId}/path`, {
+      method: 'PATCH',
+      headers: {
+        ...getHeaders(settings),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ local_vault_path: localVaultPath.trim() }),
+    })
+
+    if (!response.ok) {
+      const errorMsg = await parseErrorMessage(response, 'Failed to update path')
+      return { success: false, error: errorMsg, statusCode: response.status }
+    }
+
+    const data = await response.json()
+    return { success: true, data }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Network error'
+    return { success: false, error: message }
+  }
+}
+
+export type DiscoveredVault = {
+  name: string
+  path: string
+  source: string
+}
+
+/**
+ * Fetch discovered Obsidian vaults from the server.
+ */
+export async function fetchDiscoveredVaults(
+  settings: SettingsState
+): Promise<ApiResult<DiscoveredVault[]>> {
+  if (!settings.backendUrl) {
+    return { success: false, error: 'No backend URL configured' }
+  }
+
+  const base = normalizeUrl(settings.backendUrl)
+
+  try {
+    const response = await fetch(`${base}/discovered-vaults`, {
+      method: 'GET',
+    })
+
+    if (!response.ok) {
+      return { success: false, error: 'Discovered vaults not available' }
+    }
+
+    const data = await response.json()
+    return { success: true, data: Array.isArray(data) ? data : [] }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Network error'
+    return { success: false, error: message }
+  }
+}
+
+
+
