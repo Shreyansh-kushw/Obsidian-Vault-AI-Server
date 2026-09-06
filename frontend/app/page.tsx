@@ -146,17 +146,22 @@ export default function Page() {
     } else if (savedVaults.length > 0) {
       chosenActive = savedVaults[0].id
       setActiveId(savedVaults[0].id)
+    } else {
+      chosenActive = ''
+      setActiveId('')
     }
 
     // Load messages from direct vault store or sessions
-    const vMsgs = getVaultMessages(chosenActive)
-    const { session, allSessions } = getOrCreateActiveSession(chosenActive)
-    setChatSessions(allSessions)
-    setCurrentSessionId(session.id)
-    if (vMsgs && vMsgs.length > 0) {
-      setMessages(vMsgs)
+    if (chosenActive) {
+      const vMsgs = getVaultMessages(chosenActive)
+      const { session, allSessions } = getOrCreateActiveSession(chosenActive)
+      setChatSessions(allSessions)
+      setCurrentSessionId(session.id)
+      setMessages(vMsgs && vMsgs.length > 0 ? vMsgs : session.messages)
     } else {
-      setMessages(session.messages)
+      setChatSessions([])
+      setCurrentSessionId('')
+      setMessages([defaultWelcomeMessage])
     }
 
     isHydrated.current = true
@@ -186,13 +191,10 @@ export default function Page() {
                 const firstId = merged[0].id
                 setActiveId(firstId)
                 const firstMsgs = getVaultMessages(firstId)
-                if (firstMsgs && firstMsgs.length > 0) {
-                  setMessages(firstMsgs)
-                } else {
-                  const { session: firstSession } = getOrCreateActiveSession(firstId)
-                  setCurrentSessionId(firstSession.id)
-                  setMessages(firstSession.messages)
-                }
+                const { session: firstSession, allSessions } = getOrCreateActiveSession(firstId)
+                setChatSessions(allSessions)
+                setCurrentSessionId(firstSession.id)
+                setMessages(firstMsgs && firstMsgs.length > 0 ? firstMsgs : firstSession.messages)
               }
               return merged
             })
@@ -535,15 +537,21 @@ export default function Page() {
     setLibraryOpen(false)
 
     // Load messages for selected vault
-    const savedForVault = getVaultMessages(id)
-    const { session, allSessions } = getOrCreateActiveSession(id)
-    setChatSessions(allSessions)
-    setCurrentSessionId(session.id)
+    if (id) {
+      const savedForVault = getVaultMessages(id)
+      const { session, allSessions } = getOrCreateActiveSession(id)
+      setChatSessions(allSessions)
+      setCurrentSessionId(session.id)
 
-    if (savedForVault && savedForVault.length > 0) {
-      setMessages(savedForVault)
+      if (savedForVault && savedForVault.length > 0) {
+        setMessages(savedForVault)
+      } else {
+        setMessages(session.messages)
+      }
     } else {
-      setMessages(session.messages)
+      setChatSessions([])
+      setCurrentSessionId('')
+      setMessages([defaultWelcomeMessage])
     }
   }
 

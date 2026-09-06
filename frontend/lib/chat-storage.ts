@@ -55,51 +55,33 @@ export function saveSessions(sessions: ChatSession[]): void {
 }
 
 /**
- * Read chat messages directly for a specific vault with recovery fallbacks
+ * Read chat messages directly for a specific vault
  */
 export function getVaultMessages(vaultId: string): Message[] | null {
-  if (typeof window === 'undefined') return null
+  if (typeof window === 'undefined' || !vaultId || !vaultId.trim()) return null
 
-  // 1. Check direct vault key for non-empty conversation
-  if (vaultId) {
-    try {
-      const data = localStorage.getItem(`${VAULT_CHATS_KEY_PREFIX}${vaultId}`)
-      if (data) {
-        const parsed = JSON.parse(data)
-        if (Array.isArray(parsed) && parsed.length > 1) {
-          return parsed
-        }
+  const cleanVaultId = vaultId.trim()
+
+  // 1. Check direct vault key for conversation
+  try {
+    const data = localStorage.getItem(`${VAULT_CHATS_KEY_PREFIX}${cleanVaultId}`)
+    if (data) {
+      const parsed = JSON.parse(data)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed
       }
-    } catch (err) {
-      console.warn('Failed to read vault messages from localStorage:', err)
     }
+  } catch (err) {
+    console.warn('Failed to read vault messages from localStorage:', err)
   }
 
-  // 2. Search in sessions list for this vault with conversation
+  // 2. Search in sessions list strictly for this specific vault
   const sessions = getSavedSessions()
-  const matching = sessions.filter((s) => (vaultId ? s.vaultId === vaultId : true))
+  const matching = sessions.filter((s) => s.vaultId === cleanVaultId)
   for (const s of matching) {
-    if (s.messages && s.messages.length > 1) {
+    if (s.messages && s.messages.length > 0) {
       return s.messages
     }
-  }
-
-  // 3. Direct vault key with single message
-  if (vaultId) {
-    try {
-      const data = localStorage.getItem(`${VAULT_CHATS_KEY_PREFIX}${vaultId}`)
-      if (data) {
-        const parsed = JSON.parse(data)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed
-        }
-      }
-    } catch {}
-  }
-
-  // 4. Any session matching
-  if (matching.length > 0 && matching[0].messages?.length > 0) {
-    return matching[0].messages
   }
 
   return null
@@ -109,9 +91,12 @@ export function getVaultMessages(vaultId: string): Message[] | null {
  * Save chat messages directly for a specific vault
  */
 export function saveVaultMessages(vaultId: string, messages: Message[]): void {
-  if (typeof window === 'undefined' || !vaultId) return
+  if (typeof window === 'undefined' || !vaultId || !vaultId.trim()) return
   try {
-    localStorage.setItem(`${VAULT_CHATS_KEY_PREFIX}${vaultId}`, JSON.stringify(messages))
+    localStorage.setItem(
+      `${VAULT_CHATS_KEY_PREFIX}${vaultId.trim()}`,
+      JSON.stringify(messages)
+    )
   } catch (err) {
     console.warn('Failed to save vault messages to localStorage:', err)
   }
@@ -125,38 +110,53 @@ export function getOrCreateActiveSession(
   preferredSessionId?: string
 ): { session: ChatSession; allSessions: ChatSession[] } {
   const allSessions = getSavedSessions()
+  const cleanVaultId = vaultId?.trim() || ''
+
+  // If no vault is specified, return a transient fresh session without mixing vaults
+  if (!cleanVaultId) {
+    const noVaultSession: ChatSession = {
+      id: 'no-vault',
+      vaultId: '',
+      title: 'No Vault Selected',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: [defaultWelcomeMessage],
+    }
+    return { session: noVaultSession, allSessions }
+  }
 
   if (preferredSessionId) {
     const existing = allSessions.find(
-      (s) => s.id === preferredSessionId && (!vaultId || s.vaultId === vaultId)
+      (s) => s.id === preferredSessionId && s.vaultId === cleanVaultId
     )
     if (existing) {
       return { session: existing, allSessions }
     }
   }
 
-  // Find most recent session for this vault
-  const vaultSessions = allSessions.filter((s) => s.vaultId === vaultId)
+  // Find most recent session strictly for this vault
+  const vaultSessions = allSessions.filter((s) => s.vaultId === cleanVaultId)
   if (vaultSessions.length > 0) {
     vaultSessions.sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     )
     const session = vaultSessions[0]
-    const directMsgs = getVaultMessages(vaultId)
-    if (directMsgs && directMsgs.length > session.messages.length) {
+    const directMsgs = getVaultMessages(cleanVaultId)
+    if (directMsgs && directMsgs.length > 0) {
       session.messages = directMsgs
     }
     return { session, allSessions }
   }
 
   // Check if direct vault messages exist
-  const directMsgs = getVaultMessages(vaultId)
-  const initialMessages = directMsgs && directMsgs.length > 0 ? directMsgs : [defaultWelcomeMessage]
+  const directMsgs = getVaultMessages(cleanVaultId)
+  const initialMessages =
+    directMsgs && directMsgs.length > 0 ? directMsgs : [defaultWelcomeMessage]
 
-  // Create brand new session
+  // Create brand new session for this vault
   const newSession: ChatSession = {
     id: crypto.randomUUID(),
-    vaultId,
+    vaultId: cleanVaultId,
     title: 'New conversation',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -165,9 +165,7 @@ export function getOrCreateActiveSession(
 
   const updatedSessions = [newSession, ...allSessions]
   saveSessions(updatedSessions)
-  if (vaultId) {
-    saveVaultMessages(vaultId, initialMessages)
-  }
+  saveVaultMessages(cleanVaultId, initialMessages)
   return { session: newSession, allSessions: updatedSessions }
 }
 
@@ -179,9 +177,10 @@ export function createNewSession(vaultId: string): {
   allSessions: ChatSession[]
 } {
   const allSessions = getSavedSessions()
+  const cleanVaultId = vaultId?.trim() || ''
   const newSession: ChatSession = {
     id: crypto.randomUUID(),
-    vaultId,
+    vaultId: cleanVaultId,
     title: 'New conversation',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -189,8 +188,8 @@ export function createNewSession(vaultId: string): {
   }
   const updatedSessions = [newSession, ...allSessions]
   saveSessions(updatedSessions)
-  if (vaultId) {
-    saveVaultMessages(vaultId, [defaultWelcomeMessage])
+  if (cleanVaultId) {
+    saveVaultMessages(cleanVaultId, [defaultWelcomeMessage])
   }
   return { session: newSession, allSessions: updatedSessions }
 }
@@ -204,10 +203,11 @@ export function updateSessionMessages(
   vaultId?: string
 ): ChatSession[] {
   const allSessions = getSavedSessions()
+  const cleanVaultId = vaultId?.trim() || ''
   const index = allSessions.findIndex((s) => s.id === sessionId)
 
-  if (vaultId) {
-    saveVaultMessages(vaultId, messages)
+  if (cleanVaultId) {
+    saveVaultMessages(cleanVaultId, messages)
   }
 
   let title = 'New conversation'
@@ -219,9 +219,12 @@ export function updateSessionMessages(
   }
 
   if (index === -1) {
+    if (!sessionId || sessionId === 'no-vault') {
+      return allSessions
+    }
     const newSession: ChatSession = {
       id: sessionId,
-      vaultId: vaultId || '',
+      vaultId: cleanVaultId,
       title,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -235,7 +238,7 @@ export function updateSessionMessages(
   const session = allSessions[index]
   const updatedSession: ChatSession = {
     ...session,
-    vaultId: vaultId || session.vaultId,
+    vaultId: cleanVaultId || session.vaultId,
     title: session.title === 'New conversation' ? title : session.title,
     messages,
     updatedAt: new Date().toISOString(),
@@ -266,8 +269,9 @@ export function deleteSession(sessionId: string): ChatSession[] {
  * Clear all messages in a session
  */
 export function resetSession(sessionId: string, vaultId?: string): ChatSession[] {
-  if (vaultId) {
-    saveVaultMessages(vaultId, [defaultWelcomeMessage])
+  const cleanVaultId = vaultId?.trim() || ''
+  if (cleanVaultId) {
+    saveVaultMessages(cleanVaultId, [defaultWelcomeMessage])
   }
-  return updateSessionMessages(sessionId, [defaultWelcomeMessage], vaultId)
+  return updateSessionMessages(sessionId, [defaultWelcomeMessage], cleanVaultId)
 }
