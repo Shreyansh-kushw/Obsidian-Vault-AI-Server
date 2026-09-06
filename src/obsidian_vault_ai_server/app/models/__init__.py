@@ -22,6 +22,7 @@ class Vaults(Base):
 
     vault_id: Mapped[str] = mapped_column(String, primary_key=True)
     vault_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    local_vault_path: Mapped[str | None] = mapped_column(String, nullable=True)
     owner_token: Mapped[str] = mapped_column(String, index=True, nullable=False)
     total_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

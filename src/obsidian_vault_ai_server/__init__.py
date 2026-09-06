@@ -81,6 +81,7 @@ async def upload_file(
     api_key: Annotated[str, Depends(verify_api_key)],
     owner_token: Annotated[str, Depends(get_owner_token)],
     job_name: Annotated[str | None, Form()] = None,
+    local_vault_path: Annotated[str | None, Form()] = None,
 ):
     """Endpoint to upload and ingest an Obsidian vault"""
 
@@ -88,10 +89,16 @@ async def upload_file(
     vault_name = (
         job_name.strip() if job_name and job_name.strip() else f"vault_{vault_id[:8]}"
     )
+    clean_local_path = (
+        local_vault_path.strip()
+        if local_vault_path and local_vault_path.strip()
+        else None
+    )
 
     new_vault = Vaults(
         vault_id=vault_id,
         vault_name=vault_name,
+        local_vault_path=clean_local_path,
         owner_token=owner_token,
         total_files=len(files),
         status="Processing",
@@ -214,6 +221,7 @@ async def list_jobs(
             "vault_id": vault.vault_id,
             "name": f"{vault.vault_name if vault.vault_name else vault.vault_id[:8]}",
             "vault_name": vault.vault_name,
+            "local_vault_path": vault.local_vault_path,
             "totalFiles": vault.total_files,
             "status": vault.status,
             "succeeded": vault.succeeded,

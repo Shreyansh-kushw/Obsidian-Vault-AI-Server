@@ -131,7 +131,8 @@ export async function testConnection(
 export async function uploadVaultFiles(
   settings: SettingsState,
   files: File[],
-  jobName?: string
+  jobName?: string,
+  localVaultPath?: string
 ): Promise<ApiResult<UploadResponse>> {
   if (!settings.backendUrl) {
     return { success: false, error: 'Please set your Backend URL in Settings.' }
@@ -147,6 +148,9 @@ export async function uploadVaultFiles(
   const formData = new FormData()
   if (jobName) {
     formData.append('job_name', jobName)
+  }
+  if (localVaultPath) {
+    formData.append('local_vault_path', localVaultPath)
   }
   files.forEach((file) => {
     formData.append('files', file)
@@ -290,6 +294,8 @@ export type BackendJobItem = {
   job_id?: string
   job_name?: string
   name?: string
+  local_vault_path?: string
+  localVaultPath?: string
   total_files?: number
   totalFiles?: number
   status: VaultStatus
