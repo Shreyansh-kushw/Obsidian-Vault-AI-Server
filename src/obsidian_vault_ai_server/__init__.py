@@ -8,11 +8,11 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     Request,
     UploadFile,
     status,
-    Form,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -23,15 +23,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obsidian_vault_ai_server.app.database import get_db
-from obsidian_vault_ai_server.app.models import Jobs
+from obsidian_vault_ai_server.app.models import Vaults
 from obsidian_vault_ai_server.app.schema import QueryRequest
 from obsidian_vault_ai_server.app.services.pipelines import (
     ingestion_pipeline,
     retrieval_pipeline,
 )
 from obsidian_vault_ai_server.app.utils.auth import (
-    get_job_or_403,
     get_owner_token,
+    get_vault_or_403,
     verify_api_key,
 )
 from obsidian_vault_ai_server.app.utils.file_validator import (
@@ -63,11 +63,6 @@ async def limit_request_size(request: Request, call_next):
         content_length = request.headers.get("content-length")
 
         if content_length and int(content_length) > MAX_FILE_BYTES:
-            # NOTE: We cannot raise HTTPExceptions inside middleware endpoints
-            # It will crash the fastapi exception handlers.
-            # instead we need to return JSONResponse manually for middleware endpoints.
-            # raise HTTPException(status_code=status.HTTP_413_PAYLOAD_TOO_LARGE, detail="File too large. (MAX: 25MB)")
-
             return JSONResponse(
                 status_code=status.HTTP_413_PAYLOAD_TOO_LARGE,
                 content={"detail": "File too large. (MAX: 25MB)"},
@@ -87,62 +82,78 @@ async def upload_file(
     owner_token: Annotated[str, Depends(get_owner_token)],
     job_name: Annotated[str | None, Form()] = None,
 ):
-    """Endpoint to upload and ingest documents"""
+    """Endpoint to upload and ingest an Obsidian vault"""
 
-    job_id = secrets.token_urlsafe(32)  # creating random job ids.
+    vault_id = secrets.token_urlsafe(32)
+    vault_name = (
+        job_name.strip() if job_name and job_name.strip() else f"vault_{vault_id[:8]}"
+    )
 
-    new_job = Jobs(
-        job_id=job_id,
-        job_name=job_name,
+    new_vault = Vaults(
+        vault_id=vault_id,
+        vault_name=vault_name,
         owner_token=owner_token,
         total_files=len(files),
+        status="Processing",
     )
 
     try:
-        db.add(new_job)
+        db.add(new_vault)
         await db.commit()
-
     except Exception as e:
         await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+    # Save files inside upload_files/{vault_name}
+    vault_dir = (UPLOAD_DIR / vault_name).resolve()
+    vault_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        for file in files:
+            filename = file.filename or "untitled.md"
+            content = await file.read()
+            validate_upload(content, filename)
+
+            # Prevent directory traversal while supporting relative subfolder paths
+            clean_relpath = Path(filename)
+            if clean_relpath.is_absolute() or ".." in clean_relpath.parts:
+                clean_relpath = Path(clean_relpath.name)
+
+            target_filepath = (vault_dir / clean_relpath).resolve()
+            if not str(target_filepath).startswith(str(vault_dir)):
+                target_filepath = vault_dir / clean_relpath.name
+
+            target_filepath.parent.mkdir(parents=True, exist_ok=True)
+
+            async with aiofiles.open(target_filepath, mode="wb") as f:
+                await f.write(content)
+
+        # Trigger background ingestion on the full vault folder
+        background_tasks.add_task(ingestion_pipeline, vault_id, vault_dir)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        vault = await db.get(Vaults, vault_id)
+        if vault:
+            vault.failed_files = {"error": str(e)}
+            vault.status = "Failed"
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
-    for index, file in enumerate(files):
-        try:
-            filename = file.filename
-            content = await file.read()
-            validate_upload(content, filename)
-            filepath = UPLOAD_DIR / f"{job_id}{index + 1}{Path(file.filename).suffix}"
-
-            async with aiofiles.open(filepath, mode="wb") as f:
-                await f.write(content)
-
-            background_tasks.add_task(ingestion_pipeline, filename, filepath, job_id, index)
-
-        except HTTPException:
-            # raise any HTTPException if encountered.
-            raise
-
-        except Exception as e:
-            # raising standard 500 error if any unknown exceptions are encountered.
-            job = await db.get(Jobs, job_id)
-            if job:
-                job.succeeded = index + 1
-                job.failed_files = {"filename": filename, "error": str(e)}
-                job.status = "Failed"
-
-                try:
-                    await db.commit()
-                except Exception:
-                    await db.rollback()
-
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-            )
-
-    return {"job_id": str(job_id), "message": "Files uploaded successfully"}
+    return {
+        "job_id": str(vault_id),
+        "vault_id": str(vault_id),
+        "message": "Files uploaded successfully",
+    }
 
 
 @app.post("/qna")
@@ -156,10 +167,10 @@ async def ques_answer(
 ):
     """Endpoint to generate response for the asked query"""
 
-    job = await get_job_or_403(query_request.job_id, owner_token, db)
-    job_id = job.job_id
+    vault = await get_vault_or_403(query_request.job_id, owner_token, db)
+    vault_id = vault.vault_id
 
-    response = await retrieval_pipeline(query_request.query, job_id, db)
+    response = await retrieval_pipeline(query_request.query, vault_id, db)
     return response
 
 
@@ -170,9 +181,8 @@ async def get_status(
     api_key: Annotated[str, Depends(verify_api_key)],
     owner_token: Annotated[str, Depends(get_owner_token)],
 ):
-    job = await get_job_or_403(job_id, owner_token, db)
-
-    return job.status
+    vault = await get_vault_or_403(job_id, owner_token, db)
+    return vault.status
 
 
 @app.get("/health")
@@ -182,26 +192,31 @@ async def health(
 ):
     return {"status": "ok"}
 
+
 @app.get("/jobs")
+@app.get("/vaults")
 async def list_jobs(
     db: Annotated[AsyncSession, Depends(get_db)],
     api_key: Annotated[str, Depends(verify_api_key)],
     owner_token: Annotated[str, Depends(get_owner_token)],
 ):
     stmt = (
-        select(Jobs)
-        .where(Jobs.owner_token == owner_token)
-        .order_by(Jobs.job_id.desc())
+        select(Vaults)
+        .where(Vaults.owner_token == owner_token)
+        .order_by(Vaults.vault_id.desc())
     )
     result = await db.execute(stmt)
-    jobs = result.scalars().all()
+    vaults = result.scalars().all()
     return [
         {
-            "id": job.job_id,
-            "name": f"{job.job_name if job.job_name else job.job_id[:8]}",
-            "totalFiles": job.total_files,
-            "status": job.status,
-            "succeeded": job.succeeded,
+            "id": vault.vault_id,
+            "job_id": vault.vault_id,
+            "vault_id": vault.vault_id,
+            "name": f"{vault.vault_name if vault.vault_name else vault.vault_id[:8]}",
+            "vault_name": vault.vault_name,
+            "totalFiles": vault.total_files,
+            "status": vault.status,
+            "succeeded": vault.succeeded,
         }
-        for job in jobs
+        for vault in vaults
     ]

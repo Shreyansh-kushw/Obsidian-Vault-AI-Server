@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from obsidian_vault_ai_server.app.models import Jobs
+from obsidian_vault_ai_server.app.models import Vaults
 from obsidian_vault_ai_server.app.utils.config import settings
 
 API_KEY = settings.api_key
@@ -29,8 +29,15 @@ async def get_owner_token(x_owner_token: Annotated[str, Depends(owner_token)]):
     return x_owner_token
 
 
-async def get_job_or_403(job_id: str, owner_token: str, db: AsyncSession):
-    job = await db.get(Jobs, job_id)
-    if not job or not secrets.compare_digest(job.owner_token, owner_token):
-        raise HTTPException(status_code=403, detail="Not your job or Job not found!")
-    return job
+async def get_vault_or_403(vault_id: str, owner_token: str, db: AsyncSession) -> Vaults:
+    vault = await db.get(Vaults, vault_id)
+    if not vault or not secrets.compare_digest(vault.owner_token, owner_token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not your vault or Vault not found!",
+        )
+    return vault
+
+
+# Alias for backward compatibility
+get_job_or_403 = get_vault_or_403
