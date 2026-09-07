@@ -1,0 +1,92 @@
+# ==============================================================================
+# Docker Compose for Obsidian-Vault-AI-Server
+# Runs FastAPI Backend (Port 8000) and Next.js Frontend (Port 3000)
+# ==============================================================================
+
+services:
+
+  # ----------------------------------------------------------------------------
+  # Backend: FastAPI API, Document Processing & Graph RAG Ingestion
+  # ----------------------------------------------------------------------------
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: obsidian-vault-ai-backend
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      # Database connection (Neon PostgreSQL or local DB)
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL_ALEMBIC=${DATABASE_URL_ALEMBIC}
+
+      # Groq AI Model Configuration
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
+
+      # Server Security Key
+      - API_KEY=${API_KEY}
+
+      - HF_HOME=/root/.cache/huggingface
+
+    volumes:
+      - vault_uploads:/app/upload_files
+      - hf_models_cache:/root/.cache/huggingface
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    networks:
+      - obsidian-network
+
+  # ----------------------------------------------------------------------------
+  # Frontend: Next.js Web UI & Chat Interface
+  # ----------------------------------------------------------------------------
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    container_name: obsidian-vault-ai-frontend
+    restart: unless-stopped
+
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+      - API_KEY=${API_KEY}
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    networks:
+      - obsidian-network
+
+  # ----------------------------------------------------------------------------
+  # Volumes & Networks
+  # ----------------------------------------------------------------------------
+
+volumes:
+  vault_uploads:
+    name: obsidian_vault_uploads
+
+  hf_models_cache:
+    name: obsidian_hf_models_cache
+
+networks:
+  obsidian-network:
+    name: obsidian_vault_ai_network
+    driver: bridge
