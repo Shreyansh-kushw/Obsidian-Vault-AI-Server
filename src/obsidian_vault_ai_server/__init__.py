@@ -498,3 +498,14 @@ async def list_vault_files(
         for note in notes
     ]
 
+
+def main():
+    """CLI entrypoint for running the server"""
+    import uvicorn
+    uvicorn.run("obsidian_vault_ai_server:app", host="0.0.0.0", port=8000, reload=False)
+
+
+if __name__ == "__main__":
+    main()
+
+
