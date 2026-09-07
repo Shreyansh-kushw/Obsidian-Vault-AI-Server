@@ -28,8 +28,9 @@ WORKDIR /app
 # Copy dependency definition files first for optimal layer caching
 COPY pyproject.toml uv.lock* ./
 
-# Install python dependencies in system environment
-RUN uv pip install --system --no-cache -r pyproject.toml
+# Install CPU-only PyTorch first to avoid downloading 2.5GB of unused NVIDIA CUDA packages, then install project dependencies
+RUN uv pip install --system --no-cache torch --index-url https://download.pytorch.org/whl/cpu && \
+    uv pip install --system --no-cache --extra-index-url https://download.pytorch.org/whl/cpu -r pyproject.toml
 
 # Copy application source and configuration
 COPY src/ ./src/

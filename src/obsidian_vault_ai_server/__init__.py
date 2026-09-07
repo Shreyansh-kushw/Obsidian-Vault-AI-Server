@@ -359,10 +359,8 @@ async def get_status(
 
 
 @app.get("/health")
-async def health(
-    api_key: Annotated[str, Depends(verify_api_key)],
-    owner_token: Annotated[str, Depends(get_owner_token)],
-):
+async def health():
+    """Public healthcheck endpoint for Docker and monitoring"""
     return {"status": "ok"}
 
 
